@@ -17,6 +17,7 @@ STARTTIME = time()
 LOGNAME = path.join(APPDIR,"%d.log"%int(STARTTIME))
 PID = getpid()
 PROCESS = ps.Process(PID)
+OUTPUT_DIR = APPDIR
 
 UNITS = {
 		"k": ("k",10**3),
@@ -222,10 +223,11 @@ if __name__=="__main__":
 	parser.add_argument("-clear",action="store_true",help="Clear log cache")
 	parser.add_argument("-runtime","-r",default=3600,type=int,help="Set run time in seconds (default 3600 = 1 hour)")
 	parser.add_argument("-sleep","-s",default=10,type=int,help="Sleep in seconds before each measuring (default 10 seconds)")
-	parser.add_argument("-out","-o",default=APPDIR,type=str,help="Output directory for data. Defaults to ~/.config/tmonitor. By default, all $(TIMESTAMP).csv, $(TIMESTAMP).log and $(TIMESTAMP).xml are created. See -csv, -log and -xml arguments respectively for more info.")
+	parser.add_argument("-out","-o",default=OUTPUT_DIR,type=str,help="Output directory for data. Defaults to ~/.config/tmonitor. By default, all $(TIMESTAMP).csv, $(TIMESTAMP).log and $(TIMESTAMP).xml are created. See -csv, -log and -xml arguments respectively for more info.")
 	parser.add_argument("-csv",default="AUTO",type=str,help="Output file for .csv format. Defaults to $(TIMESTAMP).csv in the output directory (see -out for more info). Can be set to STDOUT and NONE.")
 	parser.add_argument("-xml",default="AUTO",type=str,help="Output file for .xml format. Defaults to $(TIMESTAMP).xml in the output directory (see -out for more info). Can be set to STDOUT and NONE.")
 	parser.add_argument("-log",default="AUTO",type=str,help="Output file for .log format. Defaults to $(TIMESTAMP).log in the output directory (see -out for more info). Can be set to STDOUT and NONE.")
+	parser.add_argument("-ignore","-i",default=0,type=int,help="Try to continue on error.")
 	
 	args = parser.parse_args()
 	if (sum(x.upper()=="STDOUT" for x in (args.csv,args.xml,args.log))>1):
@@ -236,8 +238,7 @@ if __name__=="__main__":
 		for l in logs: remove(l)
 		print("Log cache cleared")
 		sys.exit(0)
-	print(args.out)
-	sys.exit(0)
+	OUTPUT_DIR = args.out
 	#if True: #debug only
 	with open(LOGNAME,"w") as LOGFILE:
 		sys.stdout = LOGFILE
