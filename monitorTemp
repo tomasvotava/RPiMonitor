@@ -236,6 +236,8 @@ if __name__=="__main__":
 		for l in logs: remove(l)
 		print("Log cache cleared")
 		sys.exit(0)
+	print(args.out)
+	sys.exit(0)
 	#if True: #debug only
 	with open(LOGNAME,"w") as LOGFILE:
 		sys.stdout = LOGFILE
