@@ -1,0 +1,313 @@
+#!/usr/bin/python3
+# -*- coding: UTF8 -*-
+
+from os import devnull, path, makedirs, environ, remove, getpid, popen
+import sys
+from time import sleep, localtime, strftime, time
+import psutil as ps
+from argparse import ArgumentParser
+from glob import glob
+from datetime import datetime
+from math import floor
+
+TIMESTAMP_FORMAT = "%Y/%m/%d %H:%M:%S"
+HOMEDIR = environ["HOME"]
+APPDIR = path.join(HOMEDIR,".config/tmonitor")
+STARTTIME = time()
+LOGNAME = path.join(APPDIR,"%d.log"%int(STARTTIME))
+PID = getpid()
+PROCESS = ps.Process(PID)
+OUTPUT_DIR = APPDIR
+
+UNITS = {
+		"k": ("k",10**3),
+		"M": ("M",10**6),
+		"G": ("G",10**9),
+		"T": ("T",10**12),
+		"ki": ("ki",1024**1),
+		"Mi": ("Mi",1024**2),
+		"Gi": ("Gi",1024**3),
+		"Ti": ("Ti",1024**4)
+		}
+
+def XMLHeader():
+	return """<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>\n<StateInfo>\n\n"""
+
+def XMLFooter():
+	return """</StateInfo>\n"""
+
+class State:
+	def __init__(self):
+		self.BootTime = 0.0
+		self.StartupTime = 0.0
+		self.CPUCount = 0
+		self.CPULoad = 0.0
+		self.Mountpoints = []
+		self.RootUsage = {}
+		self.ConnectionsCount = {}
+		self.CurrentProcMemory = 0
+		self.ProcCount = 0
+		self.Memory = {}
+		self.CPUTemp = 0.0
+		self.GPUTemp = 0.0
+		self.CurrentTime = 0.0
+		self.Delta = 0.0
+	def getXML(self,tag="State"):
+		xmlcode = """
+		<%(Tag)s delta="%(Delta).2f">
+			<Prop name="BootTime" value="%(BootTime).2f" />
+			<Prop name="StartupTime" value="%(StartupTime).2f" />
+			<Prop name="CPUCount" value="%(CPUCount)d" />
+			<Prop name="CPULoad" value="%(CPULoad).2f" />
+			<Prop name="Mountpoints" value="%(Mountpoints)s" />
+			<Prop name="ConnectionsCount" sub="established" value="%(ConnectionsCountEstablished)d" />
+			<Prop name="ConnectionsCount" sub="listening" value="%(ConnectionsCountListen)d" />
+			<Prop name="ConnectionsCount" sub="other" value="%(ConnectionsCountOther)d" />
+			<Prop name="ConnectionsCount" sub="total" value="%(ConnectionsCountTotal)d" />
+			<Prop name="CurrentProcMemory" value="%(CurrentProcMemory)d" />
+			<Prop name="ProcCount" value="%(ProcCount)d" />
+			<Prop name="Memory" sub="free" value="%(MemoryFree)d" />
+			<Prop name="Memory" sub="used" value="%(MemoryUsed)d" />
+			<Prop name="Memory" sub="total" value="%(MemoryTotal)d" />
+			<Prop name="CPUTemp" value="%(CPUTemp).2f" />
+			<Prop name="GPUTemp" value="%(GPUTemp).2f" />
+			<Prop name="CurrentTime" value="%(CurrentTime).2f" />
+			<Prop name="RootUsage" sub="total" value="%(RootUsageTotal)d" />
+			<Prop name="RootUsage" sub="used" value="%(RootUsageUsed)d" />
+			<Prop name="RootUsage" sub="free" value="%(RootUsageFree)d" />
+		</%(Tag)s>\n
+		"""% {
+			"BootTime": self.BootTime,
+			"StartupTime": self.StartupTime,
+			"CPUCount": self.CPUCount,
+			"CPULoad": self.CPULoad,
+			"Mountpoints": self.Mountpoints,
+			"ConnectionsCountEstablished": self.ConnectionsCount["established"],
+			"ConnectionsCountListen": self.ConnectionsCount["listening"],
+			"ConnectionsCountOther": self.ConnectionsCount["other"],
+			"ConnectionsCountTotal": self.ConnectionsCount["total"],
+			"CurrentProcMemory": self.CurrentProcMemory,
+			"ProcCount": self.ProcCount,
+			"MemoryFree": self.Memory["free"],
+			"MemoryUsed": self.Memory["used"],
+			"MemoryTotal": self.Memory["total"],
+			"CPUTemp": self.CPUTemp,
+			"GPUTemp": self.GPUTemp,
+			"CurrentTime": self.CurrentTime,
+			"RootUsageTotal": self.RootUsage["total"],
+			"RootUsageUsed": self.RootUsage["used"],
+			"RootUsageFree": self.RootUsage["free"],
+			"Delta": self.Delta,
+			"Tag": tag
+		}
+		return xmlcode
+		
+class StateInfo:
+	States = []
+	StartupInfo = State()
+		
+def calcUnit(num,unitID,baseUnit="B"):
+	unit = UNITS[unitID]
+	return "%.2f %s%s"%(num/unit[1],unit[0],baseUnit)
+
+def getBootTimestamp():
+	return strftime(TIMESTAMP_FORMAT,localtime(ps.boot_time()))
+
+def getBootTime():
+	return ps.boot_time()
+	
+def getStartTimestamp():
+	return strftime(TIMESTAMP_FORMAT,localtime(STARTTIME))
+
+def getTimestampSinceBoot():
+	boot = datetime.fromtimestamp(getBootTime())
+	d = datetime.now()-boot
+	hours, remainder = divmod(d.seconds, 3600)
+	minutes, seconds = divmod(remainder, 60)
+	return "%d days, %d hours, %d minutes and %d seconds"%(d.days,hours,minutes,seconds)
+	
+def getCPUCount():
+	return ps.cpu_count()
+
+def getCPULoad():
+	return float(ps.cpu_percent())
+
+def getMounts():
+	m = "no.\tdevice\t\tmountpoint\tfstype\toptions\n"
+	m += ("-"*70)
+	m += "\n"
+	partid = 0
+	for p in ps.disk_partitions():
+		m += "%02d:\t%s\t%s\t\t%s\t%s\n"%(partid,p.device,p.mountpoint,p.fstype,p.opts)
+		partid+=1
+	return m
+
+def getMountpoints():
+	mp = []
+	for p in ps.disk_partitions():
+		mp.append({
+			"dev": p.device,
+			"mountpoint": p.mountpoint,
+			"fstype": p.fstype,
+			"opts": p.opts
+			})
+	return mp
+
+def getRootUsageStamp(unitID="Gi"):
+	u = ps.disk_usage("/")
+	if unitID==None: unitID = "Gi"
+	unit = UNITS[unitID]
+	return "ROOT: (%.2f %%/%.2f %% FREE/USED): %s USED of %s TOTAL (%s FREE)"% (
+																		(100/u.total*u.free),(100/u.total*u.used),
+																		calcUnit(u.used,unitID),
+																		calcUnit(u.total,unitID),
+																		calcUnit(u.free,unitID))
+
+def getRootUsage():
+	u = ps.disk_usage("/")
+	return {"total": u.total, "used": u.used, "free": u.free}
+
+def getConnectionCountStamp():
+	c = getConnectionCount()
+	return "CONN: %d ESTABLISHED / %d LISTEN / %d OTHER / %d TOTAL"%(c["established"],c["listening"],c["other"],c["total"])
+
+def getConnectionCount():
+	connections = ps.net_connections()
+	total = len(connections)
+	established = 0
+	listening = 0
+	other = 0
+	for conn in connections:
+		if conn[5]==ps.CONN_ESTABLISHED: established+=1
+		elif conn[5]==ps.CONN_LISTEN: listening+=1
+		else: other+=1
+	return {"total": total,
+			"established": established,
+			"listening": listening,
+			"other": other}
+
+def getCurrentProcMemory():
+	return PROCESS.memory_info().rss
+
+def getProcCount():
+	return len(ps.pids())
+
+def getMemoryInfo(unitID="Mi"):
+	v = ps.virtual_memory()
+	if unitID==None: unitID = "Mi"
+	return "MEMORY: (%.2f %%/%.2f %% FREE/USED): %s USED of %s TOTAL (%s FREE)"% (
+															(100/v.total*v.available),(100/v.total*v.used),
+															calcUnit(v.used,unitID),
+															calcUnit(v.total,unitID),
+															calcUnit(v.available,unitID)
+															)
+
+def getMemory():
+	v = ps.virtual_memory()
+	return {
+			"total": v.total,
+			"free": v.available,
+			"used": v.used
+			}
+
+def getCPUTemp():
+	return float(popen("cat /sys/class/thermal/thermal_zone0/temp").read().replace("\n",""))/1000
+
+def getGPUTemp():
+	return float(popen("vcgencmd measure_temp").read().replace("temp=","").replace("\'C\n",""))
+
+if __name__=="__main__":
+	if not path.exists(APPDIR):
+		makedirs(APPDIR)
+	parser = ArgumentParser()
+	parser.add_argument("-clear",action="store_true",help="Clear log cache")
+	parser.add_argument("-runtime","-r",default=3600,type=int,help="Set run time in seconds (default 3600 = 1 hour)")
+	parser.add_argument("-sleep","-s",default=10,type=int,help="Sleep in seconds before each measuring (default 10 seconds)")
+	parser.add_argument("-out","-o",default=OUTPUT_DIR,type=str,help="Output directory for data. Defaults to ~/.config/tmonitor. By default, all $(TIMESTAMP).csv, $(TIMESTAMP).log and $(TIMESTAMP).xml are created. See -csv, -log and -xml arguments respectively for more info.")
+	parser.add_argument("-csv",default="AUTO",type=str,help="Output file for .csv format. Defaults to $(TIMESTAMP).csv in the output directory (see -out for more info). Can be set to STDOUT and NONE.")
+	parser.add_argument("-xml",default="AUTO",type=str,help="Output file for .xml format. Defaults to $(TIMESTAMP).xml in the output directory (see -out for more info). Can be set to STDOUT and NONE.")
+	parser.add_argument("-log",default="AUTO",type=str,help="Output file for .log format. Defaults to $(TIMESTAMP).log in the output directory (see -out for more info). Can be set to STDOUT and NONE.")
+	parser.add_argument("-ignore","-i",default=0,type=int,help="Try to continue on error.")
+	
+	args = parser.parse_args()
+	if (sum(x.upper()=="STDOUT" for x in (args.csv,args.xml,args.log))>1):
+		print("Error: Only one output type may be set to STDOUT at a time.")
+		sys.exit(1)
+	if (args.clear):
+		logs = glob(path.join(APPDIR,"*.log"))
+		for l in logs: remove(l)
+		print("Log cache cleared")
+		sys.exit(0)
+	OUTPUT_DIR = args.out
+	#if True: #debug only
+	with open(LOGNAME,"w") as LOGFILE:
+		sys.stdout = LOGFILE
+		print("#"*80)
+		print("Started at: %s"%getStartTimestamp())
+		print("Boot time: %s"%getBootTimestamp())
+		print("Time since boot: %s"%getTimestampSinceBoot())
+		print("CPU Count: %d"%getCPUCount())
+		print(getMounts())
+		print(getMemoryInfo())
+		print("PID: %s"%str(getpid()))
+		print("Will be running for %d seconds, stopping each %d seconds to measure...\n"%(args.runtime,args.sleep))
+		STARTTIME = int(round(time()))
+		delta = 0
+		ctime = time()
+		
+		StateInfo.StartupInfo.BootTime = getBootTime()
+		StateInfo.StartupInfo.StartupTime = STARTTIME
+		StateInfo.StartupInfo.CPUCount = getCPUCount()
+		StateInfo.StartupInfo.CPULoad = getCPULoad()
+		StateInfo.StartupInfo.Mountpoints = getMountpoints()
+		StateInfo.StartupInfo.RootUsage = getRootUsage()
+		StateInfo.StartupInfo.ConnectionsCount = getConnectionCount()
+		StateInfo.StartupInfo.CurrentProcMemory = getCurrentProcMemory()
+		StateInfo.StartupInfo.ProcCount = getProcCount()
+		StateInfo.StartupInfo.Memory = getMemory()
+		StateInfo.StartupInfo.CPUTemp = getCPUTemp()
+		StateInfo.StartupInfo.GPUTemp = getGPUTemp()
+		StateInfo.StartupInfo.CurrentTime = time()
+		
+		print("#BEGIN")
+		while True:
+			procmem = getCurrentProcMemory()
+			print("Delta: %d seconds"%delta)
+			print("Memory consumed by current process: %s (%d bytes)"%(calcUnit(procmem,"Mi"),procmem))
+			print(getMemoryInfo())
+			print("CPU Load: %f %%"%getCPULoad())
+			print(getRootUsageStamp())
+			print(getConnectionCountStamp())
+			print("Number of processes: %d"%getProcCount())
+			print("Temperature [CPU / GPU]: %.2f / %.2f °"%(getCPUTemp(),getGPUTemp()))
+			print("--")
+			sleep(args.sleep)
+			ctime = time()
+			delta = ctime-STARTTIME
+			currentState = State()
+			
+			currentState.CPULoad = getCPULoad()
+			currentState.RootUsage = getRootUsage()
+			currentState.ConnectionsCount = getConnectionCount()
+			currentState.CurrentProcMemory = getCurrentProcMemory()
+			currentState.ProcCount = getProcCount()
+			currentState.Memory = getMemory()
+			currentState.CPUTemp = getCPUTemp()
+			currentState.GPUTemp = getGPUTemp()
+			currentState.CurrentTime = time()
+			currentState.Delta = delta
+			
+			StateInfo.States.append(currentState)
+			
+			if (delta>=args.runtime):
+				print("Runtime reached at %d seconds"%delta)
+				print("#END")
+				break
+		print("Exporting data...")
+		with open(path.join(APPDIR,"output.xml"),"w") as fid:
+			fid.write(XMLHeader())
+			fid.write(StateInfo.StartupInfo.getXML("StartupState"))
+			for state in StateInfo.States:
+				fid.write(state.getXML("State"))
+			fid.write(XMLFooter())
+		print("\nDone.")
